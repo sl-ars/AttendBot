@@ -1,10 +1,11 @@
-version: "3"
 services:
   seleniarm:
-    image: seleniarm/standalone-chromium:latest
+    image: ${SELENIUM_IMAGE:-seleniarm/standalone-chromium:latest}
     shm_size: 2gb
+    restart: unless-stopped
     environment:
       - SE_NODE_MAX_SESSIONS=3
       - SE_NODE_OVERRIDE_MAX_SESSIONS=true
+      - SE_START_XVFB=true
     ports:
       - "4444:4444"
