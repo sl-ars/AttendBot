@@ -1,37 +1,108 @@
-## Auto attend script in wsp system
+# Auto-Attend for WSP
 
 Automatically attend for a subject and send a message via telegram bot
 
-### To run this script you need to follow these steps
+## Quick Start
 
-1. Install Docker <https://docs.docker.com/engine/install/ubuntu/>
+1. **Install Docker** for your OS
+   [https://docs.docker.com/engine/install/](https://docs.docker.com/engine/install/)
 
-2. Depending on your server configuration, use the appropriate command:
-    - ARM: `docker compose up -d`
-    - x86:
+2. **Create and fill environment**
 
-    ```bash
-        SELENIUM_IMAGE=selenium/standalone-chrome:latest docker-compose up -d
-    ```
+   ```bash
+   cp .env.example .env
+   ```
 
-3. Change secrets in `configurations/settings.py`
+   * Get **bot token** from **@BotFather**.
+   * Get **chat id** from a helper bot (e.g. **@userinfobot** or **@chatid_echo_bot**).
+   * Put values into `.env`:
 
-4. Run this command
+     ```
+     WSP_LOGIN=...
+     WSP_PASSWORD=...
+     TG_BOT_TOKEN=...
+     TG_CHAT_ID=...
+     ```
 
-```bash
-nohup python3 attendv2.py &
-```
+3. **Edit schedule**
+   Update time windows and timezone in `schedule.toml` (defaults are included). Example:
 
-*(Optional)* You can run this script automatically by installing and customizing cron
+   ```toml
+   timezone = "Asia/Almaty"
 
-<details> <summary>For Ubuntu</summary>
+   [defaults]
+   windows = ["07:00-19:00"]
 
-```bash
-sudo apt-get update
-sudo apt-get install cron
-echo "*/5 * * * * pgrep -f '^python3 /home/ubuntu/autoatt/Auto_attend/attendv2.py' || nohup python3 /home/ubuntu/autoatt/Auto_attend/attendv2.py > testing.out &" | crontab -
-```
+   [weekdays.monday]
+   enabled = true
+   windows = ["07:00-12:00", "13:00-15:00"]
 
-Last command will check script every 5 mins and execute if it was stopped
+   [weekdays.saturday]
+   enabled = false
 
-</details>
+   [weekdays.sunday]
+   enabled = false
+   ```
+
+4. **Build & run with Docker Compose (choose your profile)**
+
+   * **Apple Silicon / ARM64**:
+
+     ```bash
+     docker compose --profile arm64 up --build -d
+     ```
+   * **Intel/AMD (x86_64)**:
+
+     ```bash
+     docker compose --profile amd64 up --build -d
+     ```
+
+5. **Watch logs**
+
+   ```bash
+   docker compose logs -f bot
+   ```
+
+   You should see startup logs and a Telegram “Bot starting” message.
+
+---
+
+## Configuration
+
+### `.env` keys
+
+| Key             | Required      | Example                                  | Notes                                      |
+| --------------- | ------------- |------------------------------------------| ------------------------------------------ |
+| `WSP_LOGIN`     | ✅             | `a_student`                              | WSP username                               |
+| `WSP_PASSWORD`  | ✅             | `********`                               | WSP password                               |
+| `TG_BOT_TOKEN`  | ✅             | `123456:ABC...`                          | From @BotFather                            |
+| `TG_CHAT_ID`    | ✅             | `123456789`                              | From a chat-id bot                         |
+| `REMOTE_URL`    | ⛔️ (defaults) | `http://selenium:4444/wd/hub`            | Internal service URL                       |
+| `BASE_URL`      | ⛔️            | `https://wsp.kbtu.kz/RegistrationOnline` | WSP page                                   |
+| `SCHEDULE_PATH` | ⛔️            | `schedule.toml`                          | Path to schedule file                      |
+| `LOG_LEVEL`     | ⛔️            | `INFO` or `DEBUG`                        | Logging level                              |
+
+
+### `schedule.toml`
+
+* `timezone` must be a valid IANA zone (e.g. `Asia/Almaty`).
+* Each weekday can be `enabled=true/false`.
+* Time windows `"HH:MM-HH:MM"`. Multiple windows per day are supported.
+* Overnight windows are supported (e.g. `"22:00-02:00"`).
+
+---
+
+## Common Commands
+
+* **Start (ARM64)**
+  `docker compose --profile arm64 up --build -d`
+* **Start (AMD64)**
+  `docker compose --profile amd64 up --build -d`
+* **Stop**
+  `docker compose down`
+* **Logs**
+  `docker compose logs -f bot`
+* **Restart only the bot**
+  `docker compose restart bot`
+* **Check Selenium status**
+  `curl http://localhost:4444/status | jq .`
