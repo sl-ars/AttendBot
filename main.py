@@ -11,6 +11,18 @@ from app.services.attendance import AttendanceService
 from app.schedule import Schedule
 
 
+def format_schedule(schedule: Schedule) -> str:
+    lines = [f"Timezone: {schedule.tz.key}"]
+    for idx, day_rule in schedule.days.items():
+        day_name = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][idx]
+        if not day_rule.enabled:
+            lines.append(f"• {day_name}: off")
+            continue
+        windows = [f"{s.strftime('%H:%M')}-{e.strftime('%H:%M')}" for s, e in day_rule.windows]
+        lines.append(f"• {day_name}: {', '.join(windows) if windows else 'default'}")
+    return "\n".join(lines)
+
+
 def main() -> int:
     settings = get_settings()
     schedule = Schedule.from_toml(settings.schedule_path)
@@ -30,8 +42,10 @@ def main() -> int:
     # --- startup notify ---
     safe_notify(
         "🚀 Bot starting\n"
+        f"Host: {hostname}\n"
         f"TZ: {schedule.tz.key}\n"
-        f"Time: {now_s()}"
+        f"Time: {now_s()}\n\n"
+        f"📅 Schedule:\n{format_schedule(schedule)}"
     )
 
     driver = make_driver(settings.remote_url)
@@ -56,7 +70,6 @@ def main() -> int:
     try:
         svc.run_loop(settings.wsp_login, settings.wsp_password, poll_secs=10)
     except Exception as e:
-        # Crash path notify (SystemExit from signals is NOT caught here)
         safe_notify(
             "💥 Bot crashed\n"
             f"Error: {type(e).__name__}: {e}\n"
@@ -65,7 +78,6 @@ def main() -> int:
         )
         raise
     finally:
-        # Ensure driver is closed on any non-signal exit (no extra tg notify here to avoid duplicates)
         try:
             driver.quit()
         except Exception:
