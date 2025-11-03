@@ -1,0 +1,34 @@
+# Timezone for all schedule calculations (IANA name)
+timezone = "Asia/Almaty"
+
+# Default windows used for days that don't specify their own.
+# Format: "HH:MM-HH:MM". Multiple windows are allowed.
+[defaults]
+windows = ["07:00-22:00"]
+
+[weekdays.monday]
+enabled = true
+# windows = ["09:00-12:00", "13:00-15:00"]
+
+[weekdays.tuesday]
+enabled = true
+# uses defaults (07:00-22:00)
+
+[weekdays.wednesday]
+enabled = true
+# uses defaults
+
+[weekdays.thursday]
+enabled = true
+# uses defaults
+
+[weekdays.friday]
+enabled = true
+# uses defaults
+
+[weekdays.saturday]
+enabled = true
+# uses defaults
+
+[weekdays.sunday]
+enabled = true
