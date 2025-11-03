@@ -11,8 +11,6 @@ x-selenium-common: &selenium-common
     automation:
       aliases:
         - selenium    # app resolves http://selenium:4444
-  ports:
-    - "4444:4444"
 
 services:
   # ---- Use this on Intel/AMD hosts ----

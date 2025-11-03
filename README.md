@@ -104,5 +104,3 @@ Automatically attend for a subject and send a message via telegram bot
   `docker compose logs -f bot`
 * **Restart only the bot**
   `docker compose restart bot`
-* **Check Selenium status**
-  `curl http://localhost:4444/status | jq .`
