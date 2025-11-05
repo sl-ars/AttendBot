@@ -39,7 +39,7 @@ def main() -> int:
         except Exception as e:
             logging.warning("Failed to send Telegram notification: %s", e)
 
-    # --- startup notify ---
+    # startup notify
     safe_notify(
         "🚀 Bot starting\n"
         f"Host: {hostname}\n"
@@ -48,7 +48,10 @@ def main() -> int:
         f"📅 Schedule:\n{format_schedule(schedule)}"
     )
 
-    driver = make_driver(settings.remote_url)
+    def create_driver():
+        return make_driver(settings.remote_url)
+
+    driver = create_driver()
 
     def _graceful_shutdown(signum=None, _frame=None):
         try:
@@ -65,7 +68,14 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _graceful_shutdown)
 
     driver.get(settings.base_url)
-    svc = AttendanceService(driver, tg, schedule)
+    svc = AttendanceService(
+        driver,
+        tg,
+        schedule,
+        wait_seconds=30,
+        base_url=settings.base_url,
+        create_driver=create_driver,
+    )
 
     try:
         svc.run_loop(settings.wsp_login, settings.wsp_password, poll_secs=10)
