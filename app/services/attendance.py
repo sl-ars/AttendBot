@@ -1,12 +1,18 @@
-# app/services/attendance.py
 import logging
 import time
 from datetime import datetime, timedelta
+from typing import Callable, Optional
+
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import (
+    TimeoutException,
+    WebDriverException,
+    InvalidSessionIdException,
+)
 from selenium.webdriver.remote.webdriver import WebDriver
+
 from ..telegram import TelegramClient
 from ..pages.login_page import LoginPage
 from ..schedule import Schedule
@@ -17,12 +23,24 @@ class AttendanceService:
     ATTEND_BTN = (By.XPATH, "//div[contains(@class,'v-button') and contains(@class,'primary')]")
     LESSON_LABEL = (By.XPATH, "//div[contains(@class,'v-label-bold') and contains(@class,'v-has-width')]")
 
-    def __init__(self, driver: WebDriver, telegram: TelegramClient, schedule: Schedule, wait_seconds: int = 30) -> None:
+    def __init__(
+        self,
+        driver: WebDriver,
+        telegram: TelegramClient,
+        schedule: Schedule,
+        wait_seconds: int = 30,
+        *,
+        base_url: str,
+        create_driver: Callable[[], WebDriver],
+    ) -> None:
         self.driver = driver
         self.wait = WebDriverWait(driver, wait_seconds)
         self.tg = telegram
         self.login_page = LoginPage(driver)
         self.schedule = schedule
+        self._create_driver = create_driver
+        self.base_url = base_url
+        self._wait_seconds = wait_seconds
         logger.info("AttendanceService initialized (wait_seconds=%s, tz=%s)", wait_seconds, self.schedule.tz.key)
 
     def _safe_url(self) -> str:
@@ -30,6 +48,33 @@ class AttendanceService:
             return self.driver.current_url
         except Exception:
             return "<unavailable>"
+
+    def _notify(self, text: str) -> None:
+        try:
+            self.tg.send_message(text)
+        except Exception:
+            logger.warning("Failed to send Telegram notification")
+
+    def _rebind_driver(self, driver: WebDriver) -> None:
+        """Rebinds internal references to a new driver instance."""
+        self.driver = driver
+        self.wait = WebDriverWait(driver, self._wait_seconds)
+        self.login_page = LoginPage(driver)
+
+    def _reconnect_driver(self, reason: str) -> None:
+        logger.error("Recreating WebDriver (reason: %s)", reason)
+        try:
+            try:
+                self.driver.quit()
+            except Exception:
+                pass
+            new_driver = self._create_driver()
+            self._rebind_driver(new_driver)
+            self.driver.get(self.base_url)
+            self._notify(f"♻️ Reconnected to Selenium (reason: {reason})")
+            logger.info("WebDriver re-created and navigated to base URL")
+        except Exception:
+            logger.exception("Failed to recreate WebDriver")
 
     def ensure_logged_in(self, username: str, password: str) -> None:
         logger.debug("Checking login state at %s", self._safe_url())
@@ -58,36 +103,28 @@ class AttendanceService:
         if secs == 0:
             return
         wake = now + timedelta(seconds=secs)
-        logger.info(
-            "Outside configured schedule — sleeping until %s (%ds)",
-            wake.strftime("%Y-%m-%d %H:%M:%S %Z"),
-            secs,
-        )
+        logger.info("Outside configured schedule — sleeping until %s (%ds)", wake.strftime("%Y-%m-%d %H:%M:%S %Z"), secs)
         time.sleep(secs)
 
     def run_loop(self, username: str, password: str, poll_secs: int = 10) -> None:
-        """Main loop with fixed-interval polling. No backoff; always sleep poll_secs (default 10s)."""
-        logger.info(
-            "Starting schedule-aware loop (fixed poll=%ss, tz=%s)",
-            poll_secs, self.schedule.tz.key
-        )
+        logger.info("Starting schedule-aware loop (fixed poll=%ss, tz=%s)", poll_secs, self.schedule.tz.key)
 
         while True:
-            # Block if outside allowed windows.
             self._sleep_until_open()
 
             try:
                 self.ensure_logged_in(username, password)
                 self.try_attend_once()
-
                 logger.debug("Sleeping %ss (inside window)", poll_secs)
                 time.sleep(poll_secs)
 
+            except InvalidSessionIdException as e:
+                logger.exception("InvalidSessionIdException: %s; will recreate driver", e)
+                self._reconnect_driver("InvalidSessionIdException")
+                time.sleep(poll_secs)
+
             except TimeoutException:
-                logger.warning(
-                    "Timeout waiting for UI elements at %s; refreshing page. Next check in %ss",
-                    self._safe_url(), poll_secs
-                )
+                logger.warning("Timeout waiting for UI at %s; refreshing. Next check in %ss", self._safe_url(), poll_secs)
                 try:
                     self.driver.refresh()
                 except Exception:
@@ -95,11 +132,11 @@ class AttendanceService:
                 time.sleep(poll_secs)
 
             except WebDriverException as e:
-                logger.exception("WebDriverException: %s; will refresh and retry in %ss", e, poll_secs)
+                logger.exception("WebDriverException: %s; will try refresh", e)
                 time.sleep(3)
                 try:
                     self.driver.refresh()
-                    logger.debug("Refreshed page after WebDriverException; current_url=%s", self._safe_url())
+                    logger.debug("Refreshed page; current_url=%s", self._safe_url())
                 except Exception:
                     logger.exception("Failed to refresh after WebDriverException")
                 time.sleep(poll_secs)
