@@ -1,6 +1,5 @@
 import logging
 import signal
-import socket
 import sys
 from datetime import datetime
 
@@ -28,7 +27,6 @@ def main() -> int:
     schedule = Schedule.from_toml(settings.schedule_path)
 
     tg = TelegramClient(settings.tg_bot_token, settings.tg_chat_id)
-    hostname = socket.gethostname()
 
     def now_s():
         return datetime.now(schedule.tz).strftime("%Y-%m-%d %H:%M:%S %Z")
@@ -39,10 +37,9 @@ def main() -> int:
         except Exception as e:
             logging.warning("Failed to send Telegram notification: %s", e)
 
-    # startup notify
     safe_notify(
         "🚀 Bot starting\n"
-        f"Host: {hostname}\n"
+        f"Account: {settings.wsp_login}\n"
         f"TZ: {schedule.tz.key}\n"
         f"Time: {now_s()}\n\n"
         f"📅 Schedule:\n{format_schedule(schedule)}"
@@ -51,31 +48,28 @@ def main() -> int:
     def create_driver():
         return make_driver(settings.remote_url)
 
-    driver = create_driver()
+    svc = AttendanceService(
+        telegram=tg,
+        schedule=schedule,
+        base_url=settings.base_url,
+        create_driver=create_driver,
+        wait_seconds=30,
+        driver=None,
+    )
 
     def _graceful_shutdown(signum=None, _frame=None):
         try:
             sig_name = signal.Signals(signum).name if signum else "UNKNOWN"
         except Exception:
             sig_name = str(signum)
-        safe_notify(f"🛑 Bot stopping (signal: {sig_name})\nHost: {hostname}\nTime: {now_s()}")
+        safe_notify(f"🛑 Bot stopping (signal: {sig_name})\nAccount: {settings.wsp_login}\nTime: {now_s()}")
         try:
-            driver.quit()
+            svc.shutdown()
         finally:
             sys.exit(0)
 
     signal.signal(signal.SIGINT, _graceful_shutdown)
     signal.signal(signal.SIGTERM, _graceful_shutdown)
-
-    driver.get(settings.base_url)
-    svc = AttendanceService(
-        driver,
-        tg,
-        schedule,
-        wait_seconds=30,
-        base_url=settings.base_url,
-        create_driver=create_driver,
-    )
 
     try:
         svc.run_loop(settings.wsp_login, settings.wsp_password, poll_secs=10)
@@ -83,13 +77,13 @@ def main() -> int:
         safe_notify(
             "💥 Bot crashed\n"
             f"Error: {type(e).__name__}: {e}\n"
-            f"Host: {hostname}\n"
+            f"Account: {settings.wsp_login}\n"
             f"Time: {now_s()}"
         )
         raise
     finally:
         try:
-            driver.quit()
+            svc.shutdown()
         except Exception:
             pass
 
