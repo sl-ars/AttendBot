@@ -1,47 +1,57 @@
-version: "3.9"
-
-x-selenium-common: &selenium-common
-  shm_size: 2gb
-  restart: unless-stopped
-  environment:
-    - SE_NODE_MAX_SESSIONS=3
-    - SE_NODE_OVERRIDE_MAX_SESSIONS=true
-    - SE_START_XVFB=true
-  networks:
-    automation:
-      aliases:
-        - selenium    # app resolves http://selenium:4444
+# AttendBot — Coolify-compatible stack.
+#
+# All runtime configuration comes from environment variables:
+#   • locally: put them in a .env file next to this file (see .env.example)
+#   • on Coolify: set them in the resource's Environment UI
+#
+# No compose profiles on purpose: Coolify does not support them
+# (https://github.com/coollabsio/coolify/issues/6395).
 
 services:
-  # ---- Use this on Intel/AMD hosts ----
-  selenium-amd64:
-    <<: *selenium-common
-    image: selenium/standalone-chrome:latest
-    platform: linux/amd64
-    profiles: ["amd64"]
-
-  # ---- Use this on Apple Silicon / ARM64 hosts ----
-  selenium-arm64:
-    <<: *selenium-common
-    image: seleniarm/standalone-chromium:latest
-    platform: linux/arm64
-    profiles: ["arm64"]
+  selenium:
+    # Multi-arch image (amd64 + arm64) — works on both Intel/AMD and ARM hosts.
+    # Override to use an alternative grid image, e.g. seleniarm/standalone-chromium:latest
+    image: ${SELENIUM_IMAGE:-selenium/standalone-chrome:latest}
+    restart: unless-stopped
+    # Chrome runs with --disable-dev-shm-usage (falls back to /tmp), so a big
+    # /dev/shm is not needed; XvFB is off because the browser is headless.
+    shm_size: 256m
+    mem_limit: ${SELENIUM_MEM_LIMIT:-1g}
+    environment:
+      - SE_START_XVFB=false
+    healthcheck:
+      # Health-check tool shipped inside the image (SeleniumHQ/docker-selenium)
+      test: ["CMD", "/opt/bin/check-grid.sh", "--host", "0.0.0.0", "--port", "4444"]
+      interval: 10s
+      timeout: 10s
+      retries: 18
+      start_period: 30s
 
   bot:
     build:
       context: .
       dockerfile: Dockerfile
     restart: unless-stopped
-    env_file:
-      - .env
+    # No ports on purpose: the bot is a worker, and the grid must stay on the
+    # internal compose network — anyone who can reach it can drive the browser.
     environment:
-      REMOTE_URL: ${REMOTE_URL:-http://selenium:4444/wd/hub}
-      BASE_URL: ${BASE_URL:-https://wsp.kbtu.kz/RegistrationOnline}
-      SEL_HOST: selenium
-      SEL_PORT: "4444"
-    networks:
-      - automation
-    profiles: ["amd64", "arm64"]
-networks:
-  automation:
-    driver: bridge
+      # Required — compose/Coolify refuse to deploy until these are set.
+      - TG_BOT_TOKEN=${TG_BOT_TOKEN:?set TG_BOT_TOKEN — Coolify env UI or local .env}
+      - TG_CHAT_ID=${TG_CHAT_ID:?set TG_CHAT_ID — Coolify env UI or local .env}
+      # Optional one-time seed for the state file (credentials are managed via /login)
+      - WSP_LOGIN=${WSP_LOGIN:-}
+      - WSP_PASSWORD=${WSP_PASSWORD:-}
+      # Optional
+      - REMOTE_URL=${REMOTE_URL:-http://selenium:4444/wd/hub}
+      - BASE_URL=${BASE_URL:-https://pge.kbtu.kz/RegistrationOnline}
+      - STATE_PATH=${STATE_PATH:-/data/state.json}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      # Persistent state: WSP credentials, base URL, schedule (state.json)
+      - bot-data:/data
+    depends_on:
+      selenium:
+        condition: service_healthy
+
+volumes:
+  bot-data:

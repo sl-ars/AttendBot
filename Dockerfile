@@ -11,12 +11,12 @@ RUN uv venv .venv && uv sync --frozen --no-dev
 
 COPY . /bot
 
-COPY docker/entrypoint.sh /entrypoint.sh
-COPY docker/wait_for_selenium.py /wait_for_selenium.py
-RUN chmod +x /entrypoint.sh
+# Persistent state (credentials, schedule) — mount a volume at /data
+RUN mkdir -p /data && chown nobody:nogroup /data
 
 USER nobody
 ENV PYTHONUNBUFFERED=1 \
+    STATE_PATH=/data/state.json \
     PATH="/bot/.venv/bin:$PATH"
 
-ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python", "/bot/main.py"]

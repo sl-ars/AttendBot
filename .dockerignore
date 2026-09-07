@@ -5,3 +5,6 @@ __pycache__/
 *.log
 .git/
 .DS_Store
+.env
+state.json
+data/

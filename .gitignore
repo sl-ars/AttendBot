@@ -268,3 +268,6 @@ poetry.toml
 pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python,jetbrains+all
+# Bot local state (credentials, schedule)
+state.json
+/data/
