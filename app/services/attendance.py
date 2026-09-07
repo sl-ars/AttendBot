@@ -1,13 +1,15 @@
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, List, Optional
 
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
+    StaleElementReferenceException,
     TimeoutException,
     WebDriverException,
     InvalidSessionIdException,
@@ -81,6 +83,11 @@ class AttendanceService:
         drv = self._create_driver()
         self._rebind_driver(drv)
         drv.get(base_url)
+        try:
+            drv.add_cookie({"name": "r5-locale", "value": "ru"})
+            drv.refresh()  # server resolves the locale per request
+        except WebDriverException:
+            logger.warning("Failed to set r5-locale=ru cookie", exc_info=True)
         self._driver_url = base_url
 
     def _try_open(self, reason: str, base_url: str) -> bool:
@@ -124,23 +131,86 @@ class AttendanceService:
             self.login_page.login(username, password)
             logger.info("Login submitted")
 
+    def _clickable_attend_buttons(self) -> List:
+        """All attend buttons that are actually clickable right now.
+
+        The teacher can open several attendance cards at once; already-marked
+        cards show a non-clickable button («Отмечен»), which must not block
+        the rest. Vaadin buttons are divs — the native `disabled` attribute
+        does not apply, so disabled state is detected via the v-disabled
+        class / aria-disabled attribute.
+        """
+        if not self.driver:
+            return []
+        out: List = []
+        try:
+            for b in self.driver.find_elements(*self.ATTEND_BTN):
+                cls = b.get_attribute("class") or ""
+                if "v-disabled" in cls or b.get_attribute("aria-disabled") == "true":
+                    continue
+                try:
+                    if not b.is_displayed():
+                        continue
+                except StaleElementReferenceException:
+                    continue
+                out.append(b)
+        except WebDriverException:
+            return []
+        return out
+
+    _TIME_LIKE = re.compile(r"\d{1,2}:\d{2}")
+
+    def _lesson_title_for(self, btn) -> str:
+        """Best-effort lesson title from the same card as the button.
+
+        Card labels render in order (title, teacher, time, remaining), so the
+        title is the closest preceding v-label-bold that is neither a time
+        range nor a "remaining" counter.
+        """
+        try:
+            labels = btn.find_elements(By.XPATH, "preceding::div[contains(@class,'v-label-bold')]")
+            texts = [(l.text or "").split("\n")[0].strip() for l in labels[-6:]]
+            for t in reversed(texts):
+                if not t:
+                    continue
+                if self._TIME_LIKE.search(t):
+                    continue
+                if t.lower().startswith(("оста", "қалд", "remain", "калды")):
+                    continue
+                return t
+        except (StaleElementReferenceException, WebDriverException):
+            pass
+        return ""
+
     def try_attend_once(self) -> bool:
+        """Click EVERY currently clickable attend button (multi-card aware).
+
+        Raises TimeoutException when no clickable button appears within the
+        wait window — i.e. everything is marked / no disciplines are open —
+        which keeps the caller's refresh-and-retry cycle going.
+        """
         if not (self.driver and self.wait):
             raise RuntimeError("Driver is not initialized")
-        logger.debug("Waiting for ATTEND button…")
-        btn = self.wait.until(EC.element_to_be_clickable(self.ATTEND_BTN))
-        logger.info("Clicking ATTEND at %s", self._safe_url())
-        btn.click()
 
-        logger.debug("Waiting for lesson label…")
-        lesson_text = self.wait.until(EC.presence_of_element_located(self.LESSON_LABEL)).text
-        lesson = (lesson_text or "").split("\n")[0].strip()
+        logger.debug("Waiting for ATTEND buttons…")
+        buttons = self.wait.until(lambda _d: self._clickable_attend_buttons() or False)
 
-        logger.info("Attended lesson: %s", lesson or "<empty>")
-        self._last_lesson = lesson or "<empty>"
-        self._last_attend_at = datetime.now(self._state_provider().schedule.tz).strftime("%Y-%m-%d %H:%M")
-        self._notify(f"Attended\n{lesson}")
-        return True
+        attended_any = False
+        for btn in buttons:
+            try:
+                title = self._lesson_title_for(btn)
+                logger.info("Clicking ATTEND (%s) at %s", title or "?", self._safe_url())
+                btn.click()
+                attended_any = True
+                self._last_lesson = title or "<без названия>"
+                self._last_attend_at = datetime.now(self._state_provider().schedule.tz).strftime("%Y-%m-%d %H:%M")
+                if title:
+                    self._notify(f"Attended\n{title}")
+                time.sleep(1.5)  # let the card settle before the next one
+            except StaleElementReferenceException:
+                logger.debug("Button went stale (page re-rendered); skipping")
+                continue
+        return attended_any
 
     def snapshot(self) -> Dict:
         """Live view for /status (read by the command thread; benign races only)."""
